@@ -1,88 +1,66 @@
-name: Build iOS IPA
+name: Build iOS
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  build-ios:
+  build:
     runs-on: macos-latest
 
-    env:
-      GODOT_VERSION: 3.5.2
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v2
 
-      - name: Set up Python (for Godot headless export)
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
+    - name: Download Godot
+      run: |
+        wget https://github.com/godotengine/godot/releases/download/3.5.3-stable/Godot_v3.5.3-stable_osx.universal.zip
+        unzip Godot_v3.5.3-stable_osx.universal.zip -d godot
+        sudo mv godot/Godot.app /Applications/Godot.app
+        sudo ln -s /Applications/Godot.app/Contents/MacOS/Godot /usr/local/bin/godot
 
-      - name: Install Godot
-        run: |
-          wget https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/Godot_v${{ env.GODOT_VERSION }}-stable_osx.universal.zip -O godot.zip
-          unzip godot.zip
-          mv Godot.app /Applications/Godot.app
+    - name: Download Godot Export Templates
+      run: |
+        mkdir -p ~/Library/Application\ Support/Godot/templates/3.5.3.stable
+        cd ~/Library/Application\ Support/Godot/templates/3.5.3.stable
+        wget https://github.com/godotengine/godot/releases/download/3.5.3-stable/Godot_v3.5.3-stable_export_templates.tpz
+        tar -xzf Godot_v3.5.3-stable_export_templates.tpz -C ~/Library/Application\ Support/Godot/templates/3.5.3.stable
+        cd templates
+        mv * ..
+        cd ..
+        ls
 
-      - name: Install Godot Headless
-        run: |
-          wget https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/Godot_v${{ env.GODOT_VERSION }}-stable_osx_headless.64.zip -O godot-headless.zip
-          unzip godot-headless.zip
-          chmod +x Godot_v${{ env.GODOT_VERSION }}-stable_osx_headless.64
-          mv Godot_v${{ env.GODOT_VERSION }}-stable_osx_headless.64 godot-headless
+    - name: Create build directory
+      run: mkdir -p build
 
-      - name: Add export templates
-        run: |
-          wget https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz -O templates.tpz
-          mkdir -p ~/.godot/templates/${{ env.GODOT_VERSION }}.stable
-          tar -xvf templates.tpz -C ~/.godot/templates/${{ env.GODOT_VERSION }}.stable
+    - name: Export iOS project
+      run: godot --export "iOS" build/your_project_name.xcodeproj
+      env:
+        DISPLAY: :99.0
+        
+    - name: Set iOS Deployment Target
+      run: sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 10.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/' build/your_project_name.xcodeproj/project.pbxproj
 
-      - name: Export iOS Project
-        run: |
-          mkdir -p build/ios
-          ./godot-headless --export "iOS" build/ios/project.xcodeproj
 
-      - name: Set up code signing files
-        run: |
-          mkdir -p ~/certs
-          echo "$CERTIFICATE_BASE64" | base64 --decode > ~/certs/dist.p12
-          echo "$PROVISIONING_PROFILE_BASE64" | base64 --decode > ~/certs/profile.mobileprovision
+    - name: Build iOS project
+      run: xcodebuild -project build/your_project_name.xcodeproj -scheme your_project_name -configuration Development -archivePath build/your_project_name.xcarchive archive \ CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
-      - name: Install certificates
-        env:
-          CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
-        run: |
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security import ~/certs/dist.p12 -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-
-      - name: Copy provisioning profile
-        run: |
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp ~/certs/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-
-      - name: Build IPA with Xcode
-        run: |
-          cd build/ios
-          xcodebuild -project project.xcodeproj \
-            -scheme "Godot iOS" \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath build/App.xcarchive \
-            archive
-
-          xcodebuild -exportArchive \
-            -archivePath build/App.xcarchive \
-            -exportPath build/exported \
-            -exportOptionsPlist ../../exportOptions.plist
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-ipa
-          path: build/ios/build/exported/*.ipa
+    - name: Export IPA
+      run: | 
+        cd build
+        cd your_project_name.xcarchive
+        cd Products
+        cd Applications
+        mkdir Payload
+        mv your_project_name.app Payload/
+        zip -r App.ipa Payload/
+        mv App.ipa ../../../
+    - name: Upload IPA to GitHub Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Ipa
+        path: build/App.ipa
